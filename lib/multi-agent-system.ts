@@ -4,7 +4,7 @@ interface Agent {
   id: string
   name: string
   model: string
-  role: "architect" | "frontend" | "backend"
+  role: "architect" | "frontend" | "backend" | "data-analyst"
   specialty: string
 }
 
@@ -46,6 +46,13 @@ export class MultiAgentSystem {
       role: "backend",
       specialty: "APIs and server logic",
     },
+    {
+      id: "data-analyst",
+      name: "Data Analyst",
+      model: "huggingface/meta-llama/Llama-3.1-8B-Instruct:free",
+      role: "architect",
+      specialty: "Data analysis and insights",
+    },
   ]
 
   private tasks: Task[] = []
@@ -77,6 +84,7 @@ Respond in JSON format:
   "description": "...",
   "frontendTasks": ["task1", "task2"],
   "backendTasks": ["task1", "task2"],
+  "dataAnalysisTasks": ["task1", "task2"],
   "sharedRequirements": ["requirement1"]
 }
     `,
@@ -110,40 +118,88 @@ Respond in JSON format:
       })
     })
 
+    projectPlan.dataAnalysisTasks?.forEach((task: string, idx: number) => {
+      allTasks.push({
+        id: `data-${idx}`,
+        description: task,
+        assignedTo: "data-analyst",
+        status: "pending",
+      })
+    })
+
     this.tasks = allTasks
 
     // Step 3: Execute tasks in parallel
     this.updateProgress({ phase: "development", message: "Agents starting work..." })
 
-    const results = await Promise.all([this.executeFrontendTasks(projectPlan), this.executeBackendTasks(projectPlan)])
+    const hasDataTasks = projectPlan.dataAnalysisTasks && projectPlan.dataAnalysisTasks.length > 0
+    const taskPromises = [
+      this.executeFrontendTasks(projectPlan),
+      this.executeBackendTasks(projectPlan),
+    ]
+    
+    if (hasDataTasks) {
+      taskPromises.push(this.executeDataAnalysisTasks(projectPlan))
+    }
+
+    const results = await Promise.all(taskPromises)
 
     // Step 4: Integration
     this.updateProgress({ phase: "integration", message: "Integrating components..." })
 
-    const integration = await this.callAgent(
-      "architect",
-      `
-You are the System Architect. Integrate the work from both agents.
+    const integrationPrompt = `
+You are the System Architect. Integrate the work from all agents.
 
 Frontend Code:
 ${results[0]}
 
 Backend Code:
 ${results[1]}
+${hasDataTasks ? `
+Data Analysis Code:
+${results[2]}
+` : ""}
 
 Create the final integrated code with all necessary files.
+IMPORTANT: Generate files with proper folder structure.
+
 Use this format for each file:
 
-\`\`\`typescript file="path/to/file.ts"
+\`\`\`typescript file="app/page.tsx"
 // code here
 \`\`\`
-    `,
-    )
+
+\`\`\`typescript file="components/Button.tsx"
+// code here
+\`\`\`
+
+\`\`\`typescript file="lib/utils.ts"
+// code here
+\`\`\`
+
+Generate files with proper folder structure:
+- app/ for Next.js pages
+- components/ for React components
+- lib/ for utilities
+- styles/ for CSS files
+- public/ for static assets
+
+Make sure to include:
+1. Main page/component file (app/page.tsx or components/App.tsx)
+2. All necessary components
+3. TypeScript types/interfaces
+4. Utility functions
+5. Styles if needed
+${hasDataTasks ? "6. Data analysis components and utilities" : ""}
+    `
+
+    const integration = await this.callAgent("architect", integrationPrompt)
 
     return {
       plan: projectPlan,
       frontendCode: results[0],
       backendCode: results[1],
+      dataAnalysisCode: hasDataTasks ? results[2] : undefined,
       integratedCode: integration,
     }
   }
@@ -181,10 +237,34 @@ IMPORTANT DESIGN RULES:
 Create all necessary React components, pages, and styles.
 Use TypeScript, Tailwind CSS, and modern React patterns.
 
+IMPORTANT: Generate files with proper folder structure following Next.js conventions:
+
 Format each file as:
-\`\`\`typescript file="path/to/file.tsx"
-// code
+\`\`\`typescript file="app/page.tsx"
+// Main page component
 \`\`\`
+
+\`\`\`typescript file="components/Button.tsx"
+// Reusable component
+\`\`\`
+
+\`\`\`typescript file="lib/utils.ts"
+// Utility functions
+\`\`\`
+
+Folder structure:
+- app/ - Next.js pages and routes
+- components/ - Reusable React components
+- lib/ - Utility functions and helpers
+- types/ - TypeScript type definitions
+- styles/ - CSS and styling files
+
+Generate complete, production-ready code with:
+- Proper TypeScript types
+- Clean component structure
+- Tailwind CSS styling
+- Error handling
+- Accessibility features
     `
 
     return await this.callAgent("frontend", prompt)
@@ -211,13 +291,86 @@ ${plan.sharedRequirements?.join("\n")}
 
 Create all necessary API routes, server actions, and data handling logic.
 
+IMPORTANT: Generate files with proper folder structure following Next.js API conventions:
+
 Format each file as:
-\`\`\`typescript file="path/to/file.ts"
-// code
+\`\`\`typescript file="app/api/users/route.ts"
+// API route handler
 \`\`\`
+
+\`\`\`typescript file="lib/db.ts"
+// Database utilities
+\`\`\`
+
+\`\`\`typescript file="lib/types.ts"
+// Type definitions
+\`\`\`
+
+Folder structure:
+- app/api/ - Next.js API routes
+- lib/ - Server utilities and helpers
+- types/ - TypeScript type definitions
+- middleware/ - Middleware functions
+
+Generate complete, production-ready code with:
+- Proper error handling
+- Input validation
+- Type safety
+- Security best practices
     `
 
     return await this.callAgent("backend", prompt)
+  }
+
+  private async executeDataAnalysisTasks(plan: any) {
+    this.updateProgress({
+      phase: "data-analysis",
+      agent: "data-analyst",
+      message: "Analyzing data and creating insights...",
+    })
+
+    const prompt = `
+You are a Data Analyst specializing in data analysis, statistics, and insights using Hugging Face models.
+
+Project: ${plan.projectName}
+Description: ${plan.description}
+
+Your tasks:
+${plan.dataAnalysisTasks?.map((t: string, i: number) => `${i + 1}. ${t}`).join("\n")}
+
+Shared Requirements:
+${plan.sharedRequirements?.join("\n")}
+
+IMPORTANT: Generate data analysis code with proper structure:
+
+Format each file as:
+\`\`\`typescript file="lib/data-analysis.ts"
+// Data analysis utilities
+\`\`\`
+
+\`\`\`typescript file="components/DataChart.tsx"
+// Data visualization component
+\`\`\`
+
+\`\`\`typescript file="lib/statistics.ts"
+// Statistical functions
+\`\`\`
+
+Folder structure:
+- lib/ - Data analysis utilities
+- components/ - Data visualization components
+- types/ - Type definitions for data
+
+Generate complete, production-ready code with:
+- Statistical analysis functions
+- Data visualization components
+- Data processing utilities
+- Type safety
+- Error handling
+- Integration with Hugging Face models for advanced analysis
+    `
+
+    return await this.callAgent("data-analyst", prompt)
   }
 
   private async callAgent(agentId: string, prompt: string): Promise<string> {

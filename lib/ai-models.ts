@@ -18,6 +18,30 @@ export const AI_MODELS = [
     provider: "Kwaipilot",
   },
   {
+    id: "mistralai/devstral-2512:free",
+    name: "Devstral 2512",
+    description: "نموذج متقدم للبرمجة والخلفية",
+    provider: "Mistral",
+  },
+  {
+    id: "huggingface/meta-llama/Llama-3.1-8B-Instruct:free",
+    name: "Hugging Face Llama 3.1",
+    description: "نموذج قوي لتحليل البيانات والتفكير",
+    provider: "Hugging Face",
+  },
+  {
+    id: "huggingface/mistralai/Mistral-7B-Instruct-v0.2:free",
+    name: "Hugging Face Mistral",
+    description: "نموذج متقدم لتحليل البيانات والبرمجة",
+    provider: "Hugging Face",
+  },
+  {
+    id: "huggingface/google/gemma-7b-it:free",
+    name: "Hugging Face Gemma",
+    description: "نموذج Google لتحليل البيانات والاستدلال",
+    provider: "Hugging Face",
+  },
+  {
     id: "allenai/olmo-3.1-32b-think:free",
     name: "OLMo Think",
     description: "للتفكير العميق والتحليل المعقد",

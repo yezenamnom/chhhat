@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
-import { checkRateLimit } from "@/lib/security"
+import { checkRateLimit } from "@/lib/rate-limit"
 
-const OPENROUTER_API_KEY = "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"
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || ""
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 const CODE_MODELS = {
@@ -12,6 +12,10 @@ const CODE_MODELS = {
 
 async function callOpenRouter(model: string, messages: any[]) {
   console.log(`[v0] Calling OpenRouter with model: ${model}`)
+
+  if (!OPENROUTER_API_KEY) {
+    throw new Error("OPENROUTER_API_KEY is not configured")
+  }
 
   const response = await fetch(OPENROUTER_URL, {
     method: "POST",

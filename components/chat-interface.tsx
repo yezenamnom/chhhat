@@ -1,6 +1,7 @@
 "use client"
 
 import type React from "react"
+import { useRouter } from "next/navigation"
 import {
   X,
   Moon,
@@ -19,6 +20,14 @@ import {
   Newspaper,
   // Settings,
   Share2,
+  Settings,
+  Square,
+  GraduationCap,
+  PenTool,
+  FileCode,
+  Globe,
+  Sparkles,
+  Cpu,
 } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
@@ -52,10 +61,12 @@ export interface Message {
 }
 
 export function ChatInterface() {
+  const router = useRouter()
   const [theme, setTheme] = useState<Theme>("dark")
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState("")
   const [selectedImage, setSelectedImage] = useState<string | null>(null)
+  const [imageError, setImageError] = useState(false)
   const [selectedModel, setSelectedModel] = useState("auto") // Default to auto-selection
   const fileInputRef = useRef<HTMLInputElement>(null)
   // Voice/live mode temporarily disabled (keep state defined to avoid runtime references)
@@ -67,6 +78,10 @@ export function ChatInterface() {
   const [deepThinking, setDeepThinking] = useState(false)
   const [enhancedAnalysis, setEnhancedAnalysis] = useState(false)
   const [deepSearch, setDeepSearch] = useState(false)
+  const [focusMode, setFocusMode] = useState<"general" | "academic" | "writing" | "code">("general")
+  const abortControllerRef = useRef<AbortController | null>(null)
+  const messageQueueRef = useRef<Array<{ content: string; image?: string }>>([])
+  const isProcessingQueueRef = useRef(false)
   const [audioLevel, setAudioLevel] = useState(0)
   const [statusText, setStatusText] = useState("قل شيئاً...")
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -134,12 +149,13 @@ export function ChatInterface() {
       deepThinking,
       enhancedAnalysis,
       deepSearch,
+      focusMode,
       // Save speech synthesis parameters
       pitch,
       rate,
       volume,
     })
-  }, [selectedModel, selectedVoice, voiceSpeed, deepThinking, enhancedAnalysis, deepSearch, pitch, rate, volume])
+  }, [selectedModel, selectedVoice, voiceSpeed, deepThinking, enhancedAnalysis, deepSearch, focusMode, pitch, rate, volume])
 
   useEffect(() => {
     scrollToBottom()
@@ -346,6 +362,7 @@ export function ChatInterface() {
             deepThinking,
             enhancedAnalysis,
             deepSearch: true, // تفعيل البحث تلقائياً في الوضع الصوتي
+            focusMode,
             isVoiceMode: true,
           }),
         })
@@ -588,28 +605,230 @@ export function ChatInterface() {
     speakText(text)
   }
 
-  const handleSubmit = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault()
+  const handleStop = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+      abortControllerRef.current = null
+    }
+    setIsLoading(false)
+  }, [])
 
-      if (!input.trim() && !selectedImage) return
+  const processMessageQueue = useCallback(async () => {
+    if (isProcessingQueueRef.current || messageQueueRef.current.length === 0) return
 
-      if (selectedImage && !input.trim()) {
+    isProcessingQueueRef.current = true
+    const queuedMessage = messageQueueRef.current.shift()
+
+    if (!queuedMessage) {
+      isProcessingQueueRef.current = false
+      return
+    }
+
+    let currentMessages: Message[] = []
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      role: "user",
+      content: queuedMessage.content,
+      timestamp: new Date(),
+      image: queuedMessage.image,
+    }
+
+    const assistantMessageId = (Date.now() + 1).toString()
+    const assistantMessage: Message = {
+      id: assistantMessageId,
+      role: "assistant",
+      content: "",
+      timestamp: new Date(),
+    }
+
+    setMessages((prevMessages) => {
+      currentMessages = prevMessages
+      return [...prevMessages, userMessage, assistantMessage]
+    })
+    setIsLoading(true)
+
+    try {
+      const abortController = new AbortController()
+      abortControllerRef.current = abortController
+
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        signal: abortController.signal,
+        body: JSON.stringify({
+          messages: currentMessages
+            .concat(userMessage)
+            .filter((m) => m.id !== "1")
+            .map((m) => ({
+              role: m.role,
+              content: m.content,
+              image: m.image,
+            })),
+          model: selectedModel,
+          deepThinking,
+          enhancedAnalysis,
+          deepSearch,
+          focusMode,
+          streaming: true,
+        }),
+      })
+
+      if (!response.body) {
+        throw new Error("No response body")
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let fullContent = ""
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        const chunk = decoder.decode(value)
+        const lines = chunk.split("\n").filter((line) => line.trim() !== "")
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.slice(6))
+
+              if (data?.type === "text" && typeof data.content === "string") {
+                fullContent += data.content
+                setMessages((prev) =>
+                  prev.map((msg) => (msg.id === assistantMessageId ? { ...msg, content: fullContent } : msg)),
+                )
+                continue
+              }
+
+              if (data?.type === "sources" && Array.isArray(data.sources)) {
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === assistantMessageId ? { ...msg, sources: data.sources, isSearchResult: true } : msg,
+                  ),
+                )
+                continue
+              }
+
+              if (data?.type === "error" && typeof data.content === "string") {
+                setMessages((prev) =>
+                  prev.map((msg) => (msg.id === assistantMessageId ? { ...msg, content: data.content } : msg)),
+                )
+                continue
+              }
+
+              if (typeof data.chunk === "string") {
+                if (data.chunk.startsWith("__MODEL__:")) {
+                  const usedModel = data.chunk.replace("__MODEL__:", "").trim()
+                  setMessages((prev) =>
+                    prev.map((msg) => (msg.id === assistantMessageId ? { ...msg, model: usedModel } : msg)),
+                  )
+                } else if (data.chunk) {
+                  fullContent += data.chunk
+                  setMessages((prev) =>
+                    prev.map((msg) => (msg.id === assistantMessageId ? { ...msg, content: fullContent } : msg)),
+                  )
+                }
+              }
+            } catch (e) {
+              // Skip invalid JSON
+            }
+          }
+        }
+      }
+
+      if (deepSearch) {
+        try {
+          setMessages((prev) => {
+            const updatedMessages = prev
+            fetch("/api/chat", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                messages: updatedMessages.concat(userMessage).map((m) => ({
+                  role: m.role,
+                  content: m.content,
+                })),
+            model: selectedModel,
+            deepSearch: true,
+            focusMode,
+            streaming: false,
+          }),
+            })
+              .then((sourcesResponse) => sourcesResponse.json())
+              .then((sourcesData) => {
+                if (sourcesData.sources) {
+                  setMessages((prevMsgs) =>
+                    prevMsgs.map((msg) =>
+                      msg.id === assistantMessageId ? { ...msg, sources: sourcesData.sources, isSearchResult: true } : msg,
+                    ),
+                  )
+                }
+              })
+              .catch((error) => {
+                console.error("Failed to fetch sources:", error)
+              })
+            return prev
+          })
+        } catch (error) {
+          console.error("Failed to fetch sources:", error)
+        }
+      }
+    } catch (error: any) {
+      if (error.name === "AbortError") {
+        setMessages((prev) =>
+          prev.map((msg) => (msg.id === assistantMessageId ? { ...msg, content: "تم إيقاف الإجابة." } : msg)),
+        )
+      } else {
+        console.error("Error:", error)
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === assistantMessageId ? { ...msg, content: "عذراً، حدث خطأ في معالجة طلبك." } : msg,
+          ),
+        )
+      }
+    } finally {
+      abortControllerRef.current = null
+      setIsLoading(false)
+      scrollToBottom()
+      isProcessingQueueRef.current = false
+
+      // معالجة الرسالة التالية في قائمة الانتظار
+      if (messageQueueRef.current.length > 0) {
+        setTimeout(() => processMessageQueue(), 100)
+      }
+    }
+  }, [selectedModel, deepThinking, enhancedAnalysis, deepSearch, scrollToBottom])
+
+  const sendMessage = useCallback(
+    async (questionText: string, image?: string | null) => {
+      if (!questionText.trim() && !image) return
+
+      if (image && !questionText.trim()) {
         alert("يرجى كتابة رسالة توضح ماذا تريد من الصورة")
+        return
+      }
+
+      // إذا كان هناك طلب قيد المعالجة، أضف الرسالة إلى قائمة الانتظار
+      if (isLoading || isProcessingQueueRef.current) {
+        messageQueueRef.current.push({
+          content: questionText,
+          image: image || undefined,
+        })
         return
       }
 
       const userMessage: Message = {
         id: Date.now().toString(),
         role: "user",
-        content: input,
+        content: questionText,
         timestamp: new Date(),
-        image: selectedImage || undefined,
+        image: image || undefined,
       }
 
       setMessages((prev) => [...prev, userMessage])
-      setInput("")
-      setSelectedImage(null)
       setIsLoading(true)
 
       const assistantMessageId = (Date.now() + 1).toString()
@@ -622,11 +841,15 @@ export function ChatInterface() {
       setMessages((prev) => [...prev, assistantMessage])
 
       try {
+        const abortController = new AbortController()
+        abortControllerRef.current = abortController
+
         const response = await fetch("/api/chat", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
+          signal: abortController.signal,
           body: JSON.stringify({
             messages: messages
               .concat(userMessage)
@@ -640,6 +863,7 @@ export function ChatInterface() {
             deepThinking,
             enhancedAnalysis,
             deepSearch,
+            focusMode,
             streaming: true,
           }),
         })
@@ -723,10 +947,11 @@ export function ChatInterface() {
                   role: m.role,
                   content: m.content,
                 })),
-                model: selectedModel,
-                deepSearch: true,
-                streaming: false,
-              }),
+            model: selectedModel,
+            deepSearch: true,
+            focusMode,
+            streaming: false,
+          }),
             })
 
             const sourcesData = await sourcesResponse.json()
@@ -741,29 +966,58 @@ export function ChatInterface() {
             console.error("Failed to fetch sources:", error)
           }
         }
-      } catch (error) {
-        console.error("Error:", error)
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === assistantMessageId ? { ...msg, content: "عذراً، حدث خطأ في معالجة طلبك." } : msg,
-          ),
-        )
+      } catch (error: any) {
+        if (error.name === "AbortError") {
+          setMessages((prev) =>
+            prev.map((msg) => (msg.id === assistantMessageId ? { ...msg, content: "تم إيقاف الإجابة." } : msg)),
+          )
+        } else {
+          console.error("Error:", error)
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === assistantMessageId ? { ...msg, content: "عذراً، حدث خطأ في معالجة طلبك." } : msg,
+            ),
+          )
+        }
       } finally {
+        abortControllerRef.current = null
         setIsLoading(false)
         scrollToBottom()
+
+        // معالجة الرسالة التالية في قائمة الانتظار
+        if (messageQueueRef.current.length > 0) {
+          setTimeout(() => processMessageQueue(), 100)
+        }
       }
     },
     [
-      input,
       isLoading,
-      selectedImage,
       messages,
       selectedModel,
       deepThinking,
       enhancedAnalysis,
       deepSearch,
+      focusMode,
       scrollToBottom,
+      processMessageQueue,
     ],
+  )
+
+  const handleSubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault()
+      await sendMessage(input, selectedImage)
+      setInput("")
+      setSelectedImage(null)
+    },
+    [input, selectedImage, sendMessage],
+  )
+
+  const handleQuestionClick = useCallback(
+    async (question: string) => {
+      await sendMessage(question)
+    },
+    [sendMessage],
   )
 
   const handleImageSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -822,8 +1076,45 @@ export function ChatInterface() {
         {/* Header */}
         <div className="border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
           <div className="flex items-center justify-between px-4 py-3">
-            <h1 className="text-lg font-semibold">مساعد الذكاء الاصطناعي</h1>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-5 w-5 text-primary" />
+                <h1 className="text-lg font-semibold">مساعد الذكاء الاصطناعي</h1>
+              </div>
+              {focusMode !== "general" && (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 text-primary px-2.5 py-1 text-xs font-medium">
+                  {focusMode === "academic" && <GraduationCap className="h-3 w-3" />}
+                  {focusMode === "writing" && <PenTool className="h-3 w-3" />}
+                  {focusMode === "code" && <FileCode className="h-3 w-3" />}
+                  {focusMode === "academic" && "أكاديمي"}
+                  {focusMode === "writing" && "كتابة"}
+                  {focusMode === "code" && "برمجة"}
+                </span>
+              )}
+            </div>
             <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="rounded-xl border border-border/50 bg-background/30 hover:bg-muted/40"
+                title="البرمجة بالذكاء الاصطناعي"
+                onClick={() => {
+                  router.push("/code-builder")
+                }}
+              >
+                <FileCode className="h-5 w-5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="rounded-xl border border-border/50 bg-background/30 hover:bg-muted/40"
+                title="لوحة التحكم - إدارة مفاتيح API"
+                onClick={() => {
+                  window.location.href = "/api-keys"
+                }}
+              >
+                <Settings className="h-5 w-5" />
+              </Button>
               <Button
                 variant="ghost"
                 size="icon"
@@ -867,7 +1158,11 @@ export function ChatInterface() {
         <div className="flex-1 overflow-y-auto scrollbar-thin bg-background">
           <div className="mx-auto max-w-3xl px-4 py-6 space-y-6">
             {messages.map((message) => (
-              <ChatMessage key={message.id} message={message} />
+              <ChatMessage 
+                key={message.id} 
+                message={message}
+                onQuestionClick={handleQuestionClick}
+              />
             ))}
 
             {isLoading && (
@@ -887,17 +1182,34 @@ export function ChatInterface() {
             <div className="rounded-2xl border border-border/60 bg-background/40 backdrop-blur supports-[backdrop-filter]:bg-background/30 shadow-[0_-8px_24px_rgba(0,0,0,0.25)] p-3 md:p-4">
               {selectedImage && (
               <div className="mb-3 relative inline-block">
-                <img
-                  src={selectedImage || "/placeholder.svg"}
-                  alt="Selected"
-                  className="h-32 rounded-lg border border-border"
-                />
+                {imageError ? (
+                  <div className="h-32 w-32 rounded-lg border border-border bg-muted flex items-center justify-center">
+                    <div className="text-center text-xs text-muted-foreground p-2">
+                      <ImageIcon className="h-6 w-6 mx-auto mb-1 opacity-50" />
+                      <div>فشل تحميل الصورة</div>
+                    </div>
+                  </div>
+                ) : (
+                  <img
+                    src={selectedImage || "/placeholder.svg"}
+                    alt="Selected"
+                    className="h-32 rounded-lg border border-border"
+                    onError={() => {
+                      console.error("فشل تحميل الصورة:", selectedImage)
+                      setImageError(true)
+                    }}
+                    onLoad={() => setImageError(false)}
+                  />
+                )}
                 <Button
                   type="button"
                   size="icon"
                   variant="destructive"
                   className="absolute -top-2 -right-2 h-6 w-6 rounded-full"
-                  onClick={() => setSelectedImage(null)}
+                  onClick={() => {
+                    setSelectedImage(null)
+                    setImageError(false)
+                  }}
                 >
                   <X className="h-4 w-4" />
                 </Button>
@@ -915,17 +1227,29 @@ export function ChatInterface() {
                     handleSubmit(e)
                   }
                 }}
-                placeholder={selectedImage ? "اكتب ماذا تريد من هذه الصورة..." : "اطرح متابعة..."}
+                placeholder={selectedImage ? "اكتب ماذا تريد من هذه الصورة..." : isLoading ? "اكتب رسالة جديدة (ستُضاف إلى قائمة الانتظار)..." : "اطرح متابعة..."}
                 className="flex-1 border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 text-right px-2"
                 dir="rtl"
-                disabled={isLoading}
               />
 
+              {isLoading && (
+                <Button
+                  type="button"
+                  size="icon"
+                  onClick={handleStop}
+                  className="h-10 w-10 shrink-0 rounded-xl"
+                  variant="destructive"
+                  title="إيقاف الإجابة الحالية"
+                >
+                  <Square className="h-5 w-5" />
+                </Button>
+              )}
               <Button
                 type="submit"
                 size="icon"
-                disabled={!input.trim() || isLoading}
+                disabled={!input.trim()}
                 className="h-10 w-10 shrink-0 rounded-xl"
+                title={isLoading ? "إضافة إلى قائمة الانتظار" : "إرسال"}
               >
                 <Send className="h-5 w-5" />
               </Button>
@@ -933,19 +1257,79 @@ export function ChatInterface() {
 
             {/* Input Tools / Model */}
             <div className="hidden md:flex items-center gap-2 pb-3 border-b border-border/50">
-              <Select value={selectedModel} onValueChange={setSelectedModel}>
-                <SelectTrigger className="w-[280px] h-9 text-sm">
-                  <SelectValue placeholder="اختر النموذج" />
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-9 w-9"
+                    title={AI_MODELS.find(m => m.id === selectedModel)?.name || 'اختر النموذج'}
+                  >
+                    <Cpu className="h-4 w-4 text-primary" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent className="w-[280px]">
+                  <DropdownMenuLabel>اختر نموذج الذكاء الاصطناعي</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  {AI_MODELS.map((model) => (
+                    <DropdownMenuItem
+                      key={model.id}
+                      onClick={() => setSelectedModel(model.id)}
+                      className="cursor-pointer"
+                    >
+                      <div className="flex flex-col items-start w-full">
+                        <div className="flex items-center gap-2">
+                          <Cpu className="h-4 w-4 text-muted-foreground" />
+                          <span className="font-medium">{model.name}</span>
+                        </div>
+                        <span className="text-xs text-muted-foreground text-right w-full">
+                          {model.description}
+                        </span>
+                      </div>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              <Select 
+                value={focusMode} 
+                onValueChange={(v) => {
+                  if (v === "code") {
+                    // الانتقال إلى قسم البرمجة
+                    router.push("/code-builder")
+                  } else {
+                    setFocusMode(v as typeof focusMode)
+                  }
+                }}
+              >
+                <SelectTrigger className="w-[180px] h-9 text-sm">
+                  <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {AI_MODELS.map((model) => (
-                    <SelectItem key={model.id} value={model.id}>
-                      <div className="flex flex-col items-start">
-                        <span className="font-medium">{model.name}</span>
-                        <span className="text-xs text-muted-foreground">{model.description}</span>
-                      </div>
-                    </SelectItem>
-                  ))}
+                  <SelectItem value="general">
+                    <div className="flex items-center gap-2">
+                      <Globe className="h-4 w-4" />
+                      <span>عام</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="academic">
+                    <div className="flex items-center gap-2">
+                      <GraduationCap className="h-4 w-4" />
+                      <span>أكاديمي</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="writing">
+                    <div className="flex items-center gap-2">
+                      <PenTool className="h-4 w-4" />
+                      <span>كتابة</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="code">
+                    <div className="flex items-center gap-2">
+                      <FileCode className="h-4 w-4" />
+                      <span>برمجة</span>
+                    </div>
+                  </SelectItem>
                 </SelectContent>
               </Select>
 
@@ -1003,69 +1387,6 @@ export function ChatInterface() {
 
 
             <div className="flex md:hidden flex-col gap-2" dir="rtl">
-              {/* Mobile Actions Menu */}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="w-full justify-between bg-transparent" size="sm">
-                    <span>الخيارات والإعدادات</span>
-                    <ChevronDown className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-[calc(100vw-2rem)] max-w-md">
-                  <DropdownMenuLabel>النموذج</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  {AI_MODELS.map((model) => (
-                    <DropdownMenuItem
-                      key={model.id}
-                      onClick={() => setSelectedModel(model.id)}
-                      className={selectedModel === model.id ? "bg-accent" : ""}
-                    >
-                      <div className="flex flex-col items-start w-full">
-                        <span className="font-medium">{model.name}</span>
-                        <span className="text-xs text-muted-foreground">{model.description}</span>
-                      </div>
-                    </DropdownMenuItem>
-                  ))}
-
-                  <DropdownMenuSeparator />
-                  <DropdownMenuLabel>الميزات</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-
-
-                  <DropdownMenuItem onClick={() => setDeepSearch(!deepSearch)} className="gap-2">
-                    <Search className={`h-4 w-4 ${deepSearch ? "text-primary" : ""}`} />
-                    <div className="flex-1">
-                      <div className="font-medium">البحث العميق</div>
-                      <div className="text-xs text-muted-foreground">بحث شامل على الإنترنت</div>
-                    </div>
-                  </DropdownMenuItem>
-
-                  <DropdownMenuItem onClick={() => setDeepThinking(!deepThinking)} className="gap-2">
-                    <Brain className={`h-4 w-4 ${deepThinking ? "text-primary" : ""}`} />
-                    <div className="flex-1">
-                      <div className="font-medium">التفكير العميق</div>
-                      <div className="text-xs text-muted-foreground">تحليل متقدم للمسائل</div>
-                    </div>
-                  </DropdownMenuItem>
-
-                  <DropdownMenuItem onClick={() => setEnhancedAnalysis(!enhancedAnalysis)} className="gap-2">
-                    <Zap className={`h-4 w-4 ${enhancedAnalysis ? "text-primary" : ""}`} />
-                    <div className="flex-1">
-                      <div className="font-medium">التحليل القوي</div>
-                      <div className="text-xs text-muted-foreground">إجابات أكثر تفصيلاً</div>
-                    </div>
-                  </DropdownMenuItem>
-
-                  <DropdownMenuItem onClick={() => fileInputRef.current?.click()} className="gap-2">
-                    <ImageIcon className="h-4 w-4" />
-                    <div className="flex-1">
-                      <div className="font-medium">رفع صورة</div>
-                      <div className="text-xs text-muted-foreground">تحليل الصور والمحتوى المرئي</div>
-                    </div>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-
               {/* Mobile Input Field */}
               <div className="flex gap-2 rounded-2xl border border-border/50 bg-background p-2">
                 <Input
@@ -1077,21 +1398,36 @@ export function ChatInterface() {
                       handleSubmit(e)
                     }
                   }}
-                  placeholder={selectedImage ? "اكتب ماذا تريد من هذه الصورة..." : "اطرح متابعة..."}
+                  placeholder={selectedImage ? "اكتب ماذا تريد من هذه الصورة..." : isLoading ? "اكتب رسالة جديدة (ستُضاف إلى قائمة الانتظار)..." : "اطرح متابعة..."}
                   className="flex-1 border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 text-right px-2"
                   dir="rtl"
-                  disabled={isLoading}
                 />
 
-                <Button type="submit" size="icon" disabled={!input.trim() || isLoading} className="h-10 w-10">
+                {isLoading && (
+                  <Button 
+                    type="button" 
+                    size="icon" 
+                    onClick={handleStop} 
+                    className="h-10 w-10" 
+                    variant="destructive"
+                    title="إيقاف الإجابة الحالية"
+                  >
+                    <Square className="h-5 w-5" />
+                  </Button>
+                )}
+                <Button 
+                  type="submit" 
+                  size="icon" 
+                  disabled={!input.trim()} 
+                  className="h-10 w-10"
+                  title={isLoading ? "إضافة إلى قائمة الانتظار" : "إرسال"}
+                >
                   <Send className="h-5 w-5" />
                 </Button>
               </div>
 
               {/* Mobile quick actions */}
               <div className="flex items-center justify-center gap-2">
-
-
                 <Button
                   type="button"
                   size="icon"
@@ -1103,6 +1439,98 @@ export function ChatInterface() {
                 >
                   <ImageIcon className="h-5 w-5" />
                 </Button>
+
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      disabled={isLoading}
+                      className="h-10 w-10"
+                      title="الخيارات والإعدادات"
+                    >
+                      <Settings className="h-5 w-5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-[calc(100vw-2rem)] max-w-md">
+                    <DropdownMenuLabel>النموذج</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    {AI_MODELS.map((model) => (
+                      <DropdownMenuItem
+                        key={model.id}
+                        onClick={() => setSelectedModel(model.id)}
+                        className={selectedModel === model.id ? "bg-accent" : ""}
+                      >
+                        <div className="flex flex-col items-start w-full">
+                          <span className="font-medium">{model.name}</span>
+                          <span className="text-xs text-muted-foreground">{model.description}</span>
+                        </div>
+                      </DropdownMenuItem>
+                    ))}
+
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel>وضع التركيز</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => setFocusMode("general")} className={focusMode === "general" ? "bg-accent" : ""}>
+                      <Globe className="h-4 w-4 mr-2" />
+                      <span>عام</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setFocusMode("academic")} className={focusMode === "academic" ? "bg-accent" : ""}>
+                      <GraduationCap className="h-4 w-4 mr-2" />
+                      <span>أكاديمي</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setFocusMode("writing")} className={focusMode === "writing" ? "bg-accent" : ""}>
+                      <PenTool className="h-4 w-4 mr-2" />
+                      <span>كتابة</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem 
+                      onClick={() => {
+                        // الانتقال إلى قسم البرمجة
+                        router.push("/code-builder")
+                      }} 
+                      className={focusMode === "code" ? "bg-accent" : ""}
+                    >
+                      <FileCode className="h-4 w-4 mr-2" />
+                      <span>برمجة</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel>الميزات</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+
+                    <DropdownMenuItem onClick={() => setDeepSearch(!deepSearch)} className="gap-2">
+                      <Search className={`h-4 w-4 ${deepSearch ? "text-primary" : ""}`} />
+                      <div className="flex-1">
+                        <div className="font-medium">البحث العميق</div>
+                        <div className="text-xs text-muted-foreground">بحث شامل على الإنترنت</div>
+                      </div>
+                    </DropdownMenuItem>
+
+                    <DropdownMenuItem onClick={() => setDeepThinking(!deepThinking)} className="gap-2">
+                      <Brain className={`h-4 w-4 ${deepThinking ? "text-primary" : ""}`} />
+                      <div className="flex-1">
+                        <div className="font-medium">التفكير العميق</div>
+                        <div className="text-xs text-muted-foreground">تحليل متقدم للمسائل</div>
+                      </div>
+                    </DropdownMenuItem>
+
+                    <DropdownMenuItem onClick={() => setEnhancedAnalysis(!enhancedAnalysis)} className="gap-2">
+                      <Zap className={`h-4 w-4 ${enhancedAnalysis ? "text-primary" : ""}`} />
+                      <div className="flex-1">
+                        <div className="font-medium">التحليل القوي</div>
+                        <div className="text-xs text-muted-foreground">إجابات أكثر تفصيلاً</div>
+                      </div>
+                    </DropdownMenuItem>
+
+                    <DropdownMenuItem onClick={() => fileInputRef.current?.click()} className="gap-2">
+                      <ImageIcon className="h-4 w-4" />
+                      <div className="flex-1">
+                        <div className="font-medium">رفع صورة</div>
+                        <div className="text-xs text-muted-foreground">تحليل الصور والمحتوى المرئي</div>
+                      </div>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
 
                 <Button
                   type="button"

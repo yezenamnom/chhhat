@@ -40,9 +40,10 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 async function callOpenRouter(messages: Message[], modelId: string, systemPrompt?: string): Promise<string> {
   const apiKey = process.env.OPENROUTER_API_KEY
 
-  if (!apiKey) {
+  if (!apiKey || apiKey.trim() === "" || apiKey === "your-openrouter-api-key-here" || apiKey === "sk-or-v1-your-api-key-here") {
     console.error("[v0] OpenRouter API key is not configured")
-    throw new Error("API configuration error. Please set OPENROUTER_API_KEY environment variable.")
+    const errorMsg = "⚠️ لم يتم تكوين مفتاح API. الرجاء إضافة OPENROUTER_API_KEY في ملف .env.local\n\nللحصول على مفتاح مجاني: https://openrouter.ai/keys"
+    throw new Error(errorMsg)
   }
 
   const actualModel = modelId === "auto" ? selectBestModel(messages[messages.length - 1]?.content || "") : modelId
@@ -512,6 +513,7 @@ async function handleChatWithRetry(
   selectedModel?: string,
   streaming = false,
   onChunk?: (chunk: string) => void,
+  focusMode: "general" | "academic" | "writing" | "code" = "general",
 ) {
   const lastUserMessage = messages[messages.length - 1]?.content || ""
 
@@ -588,6 +590,7 @@ export async function POST(request: NextRequest) {
       deepSearch = false,
       isVoiceMode = false,
       streaming = false,
+      focusMode = "general",
     } = await request.json()
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
@@ -619,11 +622,12 @@ export async function POST(request: NextRequest) {
                 selectedModel || FREE_MODELS[0],
                 deepThinking,
                 isVoiceMode,
+                focusMode,
               )
             } else {
               await handleChatWithRetry(sanitizedMessages, isVoiceMode, deepThinking, selectedModel, true, (chunk) => {
                 controller.enqueue(encoder.encode(`data: ${JSON.stringify({ chunk })}\n\n`))
-              })
+              }, focusMode)
             }
             controller.close()
           } catch (error) {
@@ -642,13 +646,26 @@ export async function POST(request: NextRequest) {
     }
 
     if (deepSearch) {
-      return await handleDeepSearch(sanitizedMessages, deepThinking, isVoiceMode, selectedModel)
+      return await handleDeepSearch(sanitizedMessages, deepThinking, isVoiceMode, selectedModel, focusMode)
     }
 
-    return await handleChatWithRetry(sanitizedMessages, isVoiceMode, deepThinking, selectedModel)
-  } catch (error) {
+    return await handleChatWithRetry(sanitizedMessages, isVoiceMode, deepThinking, selectedModel, false, undefined, focusMode)
+  } catch (error: any) {
     console.error("[v0] Chat API error:", error)
-    return NextResponse.json({ message: "عذراً، حدث خطأ في معالجة طلبك." }, { status: 500 })
+    const errorMessage = error?.message || "عذراً، حدث خطأ في معالجة طلبك."
+    
+    // إذا كان الخطأ متعلق بمفتاح API، أرسل رسالة واضحة
+    if (errorMessage.includes("API") || errorMessage.includes("مفتاح")) {
+      return NextResponse.json({ 
+        message: errorMessage,
+        error: "API_KEY_MISSING"
+      }, { status: 500 })
+    }
+    
+    return NextResponse.json({ 
+      message: errorMessage,
+      error: error?.name || "UNKNOWN_ERROR"
+    }, { status: 500 })
   }
 }
 
@@ -656,6 +673,9 @@ async function handleDeepSearchStreaming(
   controller: ReadableStreamDefaultController,
   messages: Message[],
   selectedModel: string,
+  deepThinking: boolean,
+  isVoiceMode: boolean,
+  focusMode: "general" | "academic" | "writing" | "code" = "general",
 ) {
   let language = "ar"
 
@@ -693,9 +713,9 @@ async function handleDeepSearchStreaming(
 
     const searchMessages = [{ role: "user" as const, content: prompt }]
 
-    await handleChatWithRetry(searchMessages, false, false, selectedModel, true, (chunk: string) => {
+    await handleChatWithRetry(searchMessages, isVoiceMode, deepThinking, selectedModel, true, (chunk: string) => {
       controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: "text", content: chunk })}\n\n`))
-    })
+    }, focusMode)
 
     controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"))
   } catch (error: any) {
@@ -715,6 +735,7 @@ async function handleDeepSearch(
   deepThinking: boolean,
   isVoiceMode = false,
   selectedModel?: string,
+  focusMode: "general" | "academic" | "writing" | "code" = "general",
 ) {
   try {
     const userQuery = messages[messages.length - 1].content

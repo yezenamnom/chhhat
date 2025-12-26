@@ -137,4 +137,21 @@
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
     @apply bg-border;
   }
+
+  /* Improve image quality and sharpness */
+  img {
+    image-rendering: auto;
+    -webkit-optimize-contrast: auto;
+    image-rendering: -webkit-optimize-contrast;
+    image-rendering: crisp-edges;
+  }
+  
+  img[loading="lazy"] {
+    image-rendering: auto;
+  }
+  
+  img[loading="eager"] {
+    image-rendering: auto;
+    -webkit-optimize-contrast: auto;
+  }
 }

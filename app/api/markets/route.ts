@@ -11,11 +11,21 @@ type Quote = {
 }
 
 const DEFAULT_SYMBOLS = [
-  { symbol: "AAPL", name: "Apple", currency: "USD" },
-  { symbol: "NVDA", name: "NVIDIA", currency: "USD" },
-  { symbol: "MSFT", name: "Microsoft", currency: "USD" },
-  { symbol: "TSLA", name: "Tesla", currency: "USD" },
-  { symbol: "AMZN", name: "Amazon", currency: "USD" },
+  { symbol: "AAPL", name: "Apple Inc.", currency: "USD" },
+  { symbol: "NVDA", name: "NVIDIA Corporation", currency: "USD" },
+  { symbol: "MSFT", name: "Microsoft Corporation", currency: "USD" },
+  { symbol: "TSLA", name: "Tesla, Inc.", currency: "USD" },
+  { symbol: "AMZN", name: "Amazon.com Inc.", currency: "USD" },
+  { symbol: "GOOGL", name: "Alphabet Inc.", currency: "USD" },
+  { symbol: "META", name: "Meta Platforms Inc.", currency: "USD" },
+  { symbol: "MU", name: "Micron Technology, Inc", currency: "USD" },
+  { symbol: "NFLX", name: "Netflix, Inc.", currency: "USD" },
+  { symbol: "AMD", name: "Advanced Micro Devices", currency: "USD" },
+  { symbol: "INTC", name: "Intel Corporation", currency: "USD" },
+  { symbol: "ORCL", name: "Oracle Corporation", currency: "USD" },
+  { symbol: "CRM", name: "Salesforce, Inc.", currency: "USD" },
+  { symbol: "ADBE", name: "Adobe Inc.", currency: "USD" },
+  { symbol: "PYPL", name: "PayPal Holdings, Inc.", currency: "USD" },
 ]
 
 // Stooq provides free delayed data via CSV.
@@ -76,7 +86,19 @@ export async function GET(req: NextRequest) {
         .filter(Boolean)
     : DEFAULT_SYMBOLS.map((s) => s.symbol)
 
-  const requested = DEFAULT_SYMBOLS.filter((s) => symbols.includes(s.symbol))
+  // Find matching symbols from DEFAULT_SYMBOLS or create new entries
+  const requested: Array<{ symbol: string; name: string; currency: string }> = []
+  const symbolSet = new Set(symbols)
+  
+  for (const symbol of symbols) {
+    const existing = DEFAULT_SYMBOLS.find((s) => s.symbol === symbol)
+    if (existing) {
+      requested.push(existing)
+    } else {
+      // For custom symbols, use symbol as name
+      requested.push({ symbol, name: symbol, currency: "USD" })
+    }
+  }
 
   const quotes = await Promise.all(requested.map((s) => fetchStooqQuote(s.symbol, s.name, s.currency)))
 

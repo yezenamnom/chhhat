@@ -1,0 +1,55 @@
+# إعداد المتغيرات البيئية - Environment Variables Setup
+
+## المتطلبات - Required
+
+### OPENROUTER_API_KEY
+**مطلوب** - مفتاح API من OpenRouter
+
+1. اذهب إلى: https://openrouter.ai/keys
+2. سجل دخولك أو أنشئ حساب جديد (مجاني)
+3. انسخ مفتاح API الخاص بك
+
+## إنشاء ملف .env.local
+
+أنشئ ملف `.env.local` في المجلد الرئيسي للمشروع وأضف:
+
+```env
+# Required - مطلوب
+OPENROUTER_API_KEY=sk-or-v1-your-api-key-here
+
+# Optional - اختياري
+NEXT_PUBLIC_SITE_URL=http://localhost:3000
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+
+# Optional TTS APIs - اختياري لتحسين الصوت
+ELEVENLABS_API_KEY=your-elevenlabs-key
+OPENAI_API_KEY=your-openai-key
+
+# Optional Search - اختياري لتحسين البحث
+SERPAPI_API_KEY=your-serpapi-key
+```
+
+## بعد إضافة المفتاح
+
+1. احفظ الملف `.env.local`
+2. أعد تشغيل السيرفر:
+   ```bash
+   npm run dev
+   ```
+
+## ملاحظات مهمة
+
+- ⚠️ **لا تشارك ملف `.env.local`** - يحتوي على مفاتيح API الخاصة بك
+- ✅ ملف `.env.local` موجود في `.gitignore` ولن يتم رفعه للـ repository
+- 🔑 يمكنك الحصول على مفتاح OpenRouter مجاني من الموقع أعلاه
+
+
+
+
+
+
+
+
+
+
+

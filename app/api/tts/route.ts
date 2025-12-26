@@ -1,5 +1,3 @@
-const OPENROUTER_API_KEY = "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"
-
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || ""
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || ""
 
