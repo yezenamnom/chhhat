@@ -228,7 +228,7 @@ export const revalidate = 300 // Revalidate every 5 minutes
 
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url)
+    const searchParams = req.nextUrl.searchParams
     const category = normalizeCategory(searchParams.get("category"))
     const limit = Math.min(Math.max(Number(searchParams.get("limit") || 20), 1), 50)
     const page = Math.max(Number(searchParams.get("page") || 1), 1)
